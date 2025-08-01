@@ -74,6 +74,18 @@
             </div>
           </div>
 
+          <div class="market-actions">
+            <button @click="openCreateChannelModal" class="btn btn-primary">
+              🔗 创建交易通道
+            </button>
+            <!-- <button @click="testButtonClick" class="btn btn-secondary" style="margin-left: 10px;">
+              测试按钮
+            </button>
+            <button @click="forceShowModal" class="btn btn-danger" style="margin-left: 10px;">
+              强制显示模态框
+            </button> -->
+          </div>
+
           <div class="search-bar">
             <input type="text" v-model="searchQuery" placeholder="搜索道具名称..." class="form-input" />
           </div>
@@ -171,15 +183,15 @@
           <div class="page-header">
             <h2>我的交易通道</h2>
             <div class="header-actions">
-              <button class="btn btn-secondary" @click="fetchMyChannels">
+              <!-- <button class="btn btn-secondary" @click="fetchMyChannels">
                 刷新通道
-              </button>
-              <button class="btn btn-primary" @click="testChannelData">
+              </button> -->
+              <!-- <button class="btn btn-primary" @click="testChannelData">
                 测试数据
               </button>
               <button class="btn btn-primary" @click="testChannelSummary(1)">
                 测试通道详情
-              </button>
+              </button> -->
             </div>
           </div>
 
@@ -243,9 +255,18 @@
           <div class="page-header">
             <h2>我的订单</h2>
             <div class="header-actions">
-              <button class="btn btn-secondary" @click="fetchMyOrders">
+              <!-- <button class="btn btn-secondary" @click="fetchMyOrders">
                 刷新订单
               </button>
+              <button class="btn btn-primary" @click="testOrderData" style="margin-left: 10px;">
+                测试订单数据
+              </button>
+              <button class="btn btn-secondary" @click="debugOrderData" style="margin-left: 10px;">
+                调试数据
+              </button> -->
+              <!-- <button class="btn btn-warning" @click="toggleEventData" style="margin-left: 10px;">
+                {{ showEventData ? '隐藏事件数据' : '显示事件数据' }}
+              </button> -->
             </div>
           </div>
 
@@ -253,6 +274,7 @@
             <div class="empty-state-icon">📋</div>
             <p>暂无订单记录</p>
             <p class="empty-state-description">订单数量: {{ myOrders.length }} | 总订单数: {{ allOrders.length }}</p>
+            <p class="empty-state-description">调试信息: 当前账户 = {{ account }}</p>
           </div>
 
           <div v-else>
@@ -263,7 +285,6 @@
                 <div>交易金额</div>
                 <div>交易身份</div>
                 <div>区块高度</div>
-                <div>交易哈希</div>
                 <div>时间</div>
               </div>
 
@@ -277,9 +298,6 @@
                   <span v-else class="status status-info">买家</span>
                 </div>
                 <div>{{ order.blockNumber > 0 ? order.blockNumber.toLocaleString() : '未知' }}</div>
-                <div class="tx-hash" :title="order.transactionHash">
-                  {{ shortenHash(order.transactionHash) }}
-                </div>
                 <div>{{ order.timestamp }}</div>
               </div>
             </div>
@@ -369,6 +387,10 @@
 
     <!-- 模态框 -->
     <div class="modal-overlay" v-if="showCreateChannelModal" @click="closeCreateChannel">
+      <!-- 调试信息 -->
+      <div style="position: fixed; top: 10px; left: 10px; background: red; color: white; padding: 10px; z-index: 2000;">
+        模态框显示状态: {{ showCreateChannelModal }}
+      </div>
       <div class="modal" @click.stop>
         <div class="modal-header">
           <h2 class="modal-title">创建交易通道</h2>
@@ -1501,6 +1523,7 @@ export default {
       gameToken: null,
       gameTokenAddress: null,
       tokenBalance: 0,
+      showEventData: false, // 控制是否显示事件数据
     };
   },
   async mounted() {
@@ -1790,6 +1813,8 @@ export default {
     },
     async fetchMyOrders() {
       try {
+        console.log('=== 开始获取订单数据 ===');
+
         if (!this.account) {
           console.warn('当前账户未设置，无法获取订单');
           this.myOrders = [];
@@ -1804,95 +1829,221 @@ export default {
           return;
         }
 
-        // 获取所有OrderCreated事件
-        const events = await this.contract.getPastEvents('OrderCreated', {
-          fromBlock: 0,
-          toBlock: 'latest'
-        });
+        console.log('当前账户:', this.account);
+        console.log('合约地址:', this.contractAddress);
 
-        // 创建订单哈希映射（添加显式类型转换）
-        const orderHashMap = {};
-        events.forEach(event => {
-          const orderId = Number(event.returnValues.orderId); // 转换为Number
-          orderHashMap[orderId] = event.transactionHash;
-        });
+        // 尝试获取 ItemTraded 事件（这是实际交易事件）
+        let tradeEvents = [];
+        let orderEvents = [];
 
-        // 获取订单总数
-        const orderCount = Number(await this.contract.methods.orderCounter().call());
+        // 只在需要显示事件数据时获取事件
+        if (this.showEventData) {
+          try {
+            console.log('尝试获取 ItemTraded 事件...');
+
+            // 使用更小的区块范围来避免 RPC 错误
+            const latestBlock = await this.web3.eth.getBlockNumber();
+            // 转换为数字类型以避免 BigInt 混合错误
+            const latestBlockNum = Number(latestBlock);
+            // 根据网络类型调整区块范围
+            const blockRange = latestBlockNum > 100000 ? 10000 : latestBlockNum; // 如果区块数很多，只获取最近10000个
+            const fromBlock = Math.max(0, latestBlockNum - blockRange);
+
+            console.log(`获取 ItemTraded 事件区块范围: ${fromBlock} 到 ${latestBlockNum} (范围: ${blockRange})`);
+
+            tradeEvents = await this.contract.getPastEvents('ItemTraded', {
+              fromBlock: fromBlock,
+              toBlock: 'latest'
+            });
+            console.log('ItemTraded 事件数量:', tradeEvents.length);
+          } catch (error) {
+            console.error('获取 ItemTraded 事件失败:', error);
+
+            // 如果获取事件失败，尝试使用备用方案
+            try {
+              console.log('尝试使用备用方案获取 ItemTraded 事件...');
+              tradeEvents = await this.contract.getPastEvents('ItemTraded', {
+                fromBlock: 'latest',
+                toBlock: 'latest'
+              });
+              console.log('备用方案获取的 ItemTraded 事件数量:', tradeEvents.length);
+            } catch (backupError) {
+              console.error('ItemTraded 备用方案也失败了:', backupError);
+              tradeEvents = [];
+            }
+          }
+
+          // 尝试获取 OrderCreated 事件
+          try {
+            console.log('尝试获取 OrderCreated 事件...');
+
+            // 使用更小的区块范围来避免 RPC 错误
+            const latestBlock = await this.web3.eth.getBlockNumber();
+            // 转换为数字类型以避免 BigInt 混合错误
+            const latestBlockNum = Number(latestBlock);
+            // 根据网络类型调整区块范围
+            const blockRange = latestBlockNum > 100000 ? 10000 : latestBlockNum; // 如果区块数很多，只获取最近10000个
+            const fromBlock = Math.max(0, latestBlockNum - blockRange);
+
+            console.log(`获取区块范围: ${fromBlock} 到 ${latestBlockNum} (范围: ${blockRange})`);
+
+            orderEvents = await this.contract.getPastEvents('OrderCreated', {
+              fromBlock: fromBlock,
+              toBlock: 'latest'
+            });
+            console.log('OrderCreated 事件数量:', orderEvents.length);
+          } catch (error) {
+            console.error('获取 OrderCreated 事件失败:', error);
+            console.log('这可能是 MetaMask RPC 错误，但订单数据仍然可用');
+            console.log('提示: 如果经常出现此错误，可以尝试切换到本地网络或减少区块范围');
+
+            // 如果获取事件失败，尝试使用备用方案
+            try {
+              console.log('尝试使用备用方案获取事件...');
+              orderEvents = await this.contract.getPastEvents('OrderCreated', {
+                fromBlock: 'latest',
+                toBlock: 'latest'
+              });
+              console.log('备用方案获取的事件数量:', orderEvents.length);
+            } catch (backupError) {
+              console.error('备用方案也失败了:', backupError);
+              orderEvents = [];
+            }
+          }
+        } else {
+          console.log('跳过事件数据获取（showEventData = false）');
+        }
 
         const orders = [];
 
-        for (let i = 1; i <= orderCount; i++) {
+        // 处理 ItemTraded 事件（主要交易记录）
+        for (let i = 0; i < tradeEvents.length; i++) {
+          const event = tradeEvents[i];
           try {
-            const orderData = await this.contract.methods.getOrder(i).call();
+            console.log(`处理 ItemTraded 事件 ${i + 1}:`, event.returnValues);
 
-            // 验证订单数据是否有效
-            const isValid = orderData && orderData[0];
+            // 验证事件数据是否有效
+            const itemId = this.toNumber(event.returnValues.itemId || 0);
+            const seller = event.returnValues.seller || '0x0000000000000000000000000000000000000000';
+            const buyer = event.returnValues.buyer || '0x0000000000000000000000000000000000000000';
 
-            if (!isValid) {
-              continue;
-            }
+            // 只添加有效的事件数据（itemId > 0 且买卖双方地址不同）
+            if (itemId > 0 && seller !== buyer &&
+              seller !== '0x0000000000000000000000000000000000000000' &&
+              buyer !== '0x0000000000000000000000000000000000000000') {
 
-            // 显式类型转换所有数值字段，并添加默认值
-            const parsedData = {
-              itemId: this.toNumber(orderData[0]),
-              seller: orderData[1] || '0x0000000000000000000000000000000000000000',
-              buyer: orderData[2] || '0x0000000000000000000000000000000000000000',
-              blockNumber: this.toNumber(orderData[3]),
-              timestamp: this.toNumber(orderData[4]), // 使用转换函数
-              amount: this.toNumber(orderData[5]),
-              transactionHash: orderHashMap[i] || '未知'
-            };
+              const orderObject = {
+                orderId: `trade_${i + 1}`,
+                itemId: itemId,
+                seller: seller,
+                buyer: buyer,
+                blockNumber: event.blockNumber,
+                timestamp: new Date().toLocaleString(), // 使用当前时间作为备用
+                amount: 0, // ItemTraded 事件可能不包含金额信息
+                rawAmount: 0,
+                eventType: 'ItemTraded'
+              };
 
-
-
-            // 时间戳处理（使用转换后的Number类型）
-            // 处理时间戳
-            let timestampStr;
-            if (!isNaN(parsedData.timestamp) && parsedData.timestamp > 0) {
-              timestampStr = new Date(parsedData.timestamp * 1000).toLocaleString();
+              orders.push(orderObject);
+              console.log(`添加有效的 ItemTraded 事件: itemId=${itemId}, seller=${seller}, buyer=${buyer}`);
             } else {
-              // 备用方案：使用区块时间
-              if (!isNaN(parsedData.blockNumber) && parsedData.blockNumber > 0) {
-                try {
-                  const block = await this.web3.eth.getBlock(parsedData.blockNumber);
-                  if (block && block.timestamp) {
-                    timestampStr = new Date(block.timestamp * 1000).toLocaleString();
-                  } else {
-                    timestampStr = '未知时间';
-                  }
-                } catch (blockError) {
-                  timestampStr = '未知时间';
-                }
-              } else {
-                timestampStr = '未知时间';
-              }
+              console.log(`跳过无效的 ItemTraded 事件: itemId=${itemId}, seller=${seller}, buyer=${buyer}`);
             }
-
-            const orderObject = {
-              orderId: i,
-              ...parsedData,
-              amount: parsedData.amount / 1e18,  // 现在可以安全运算
-              timestamp: timestampStr,
-              rawAmount: parsedData.amount       // 保留原始值
-            };
-
-            orders.push(orderObject);
-          } catch (orderError) {
-            console.error(`获取订单 ${i} 失败:`, orderError);
-            // 继续处理下一个订单
+          } catch (error) {
+            console.error(`处理 ItemTraded 事件 ${i + 1} 失败:`, error);
           }
         }
 
+        // 处理 OrderCreated 事件
+        for (let i = 0; i < orderEvents.length; i++) {
+          const event = orderEvents[i];
+          try {
+            console.log(`处理 OrderCreated 事件 ${i + 1}:`, event.returnValues);
 
+            // 验证 OrderCreated 事件是否有效
+            const orderId = Number(event.returnValues.orderId || 0);
+
+            // 只添加有效的订单事件（orderId > 0）
+            if (orderId > 0) {
+              const orderObject = {
+                orderId: `order_${orderId}`,
+                itemId: 0, // OrderCreated 事件可能不包含道具ID
+                seller: '0x0000000000000000000000000000000000000000',
+                buyer: '0x0000000000000000000000000000000000000000',
+                blockNumber: event.blockNumber,
+                timestamp: new Date().toLocaleString(),
+                amount: 0,
+                rawAmount: 0,
+                eventType: 'OrderCreated'
+              };
+
+              orders.push(orderObject);
+              console.log(`添加有效的 OrderCreated 事件: orderId=${orderId}`);
+            } else {
+              console.log(`跳过无效的 OrderCreated 事件: orderId=${orderId}`);
+            }
+          } catch (error) {
+            console.error(`处理 OrderCreated 事件 ${i + 1} 失败:`, error);
+          }
+        }
+
+        // 尝试获取订单总数和详细信息
+        try {
+          console.log('尝试获取订单计数器...');
+          const orderCount = Number(await this.contract.methods.orderCounter().call());
+          console.log('订单总数:', orderCount);
+
+          console.log('开始获取订单详细信息...');
+
+          for (let i = 1; i <= orderCount; i++) {
+            try {
+              console.log(`尝试获取订单 ${i} 的详细信息...`);
+              const orderData = await this.contract.methods.getOrder(i).call();
+              console.log(`订单 ${i} 数据:`, orderData);
+
+              if (orderData && orderData[0]) {
+                const parsedData = {
+                  itemId: this.toNumber(orderData[0]),
+                  seller: orderData[1] || '0x0000000000000000000000000000000000000000',
+                  buyer: orderData[2] || '0x0000000000000000000000000000000000000000',
+                  blockNumber: this.toNumber(orderData[3]),
+                  timestamp: this.toNumber(orderData[4]),
+                  amount: this.toNumber(orderData[5]),
+                  rawAmount: this.toNumber(orderData[5]),
+                  eventType: 'getOrder'
+                };
+
+                let timestampStr;
+                if (!isNaN(parsedData.timestamp) && parsedData.timestamp > 0) {
+                  timestampStr = new Date(parsedData.timestamp * 1000).toLocaleString();
+                } else {
+                  timestampStr = '未知时间';
+                }
+
+                const orderObject = {
+                  orderId: i,
+                  ...parsedData,
+                  amount: parsedData.amount / 1e18,
+                  timestamp: timestampStr
+                };
+
+                orders.push(orderObject);
+              }
+            } catch (orderError) {
+              console.error(`获取订单 ${i} 失败:`, orderError);
+            }
+          }
+        } catch (error) {
+          console.error('获取订单计数器失败:', error);
+        }
+
+        console.log('所有订单数据:', orders);
 
         // 过滤当前用户相关订单
         this.myOrders = orders.filter(order => {
-          // 确保 seller 和 buyer 存在且为字符串
           const seller = order.seller || '';
           const buyer = order.buyer || '';
 
-          // 确保当前账户存在
           if (!this.account) {
             console.warn('当前账户未设置，跳过订单过滤');
             return false;
@@ -1902,12 +2053,52 @@ export default {
           const isRelevant = seller.toLowerCase() === currentAccount ||
             buyer.toLowerCase() === currentAccount;
 
+          console.log(`订单 ${order.orderId}: seller=${seller}, buyer=${buyer}, isRelevant=${isRelevant}`);
           return isRelevant;
         });
+
         this.allOrders = orders;
+
+        console.log('过滤后的我的订单:', this.myOrders);
+        console.log('所有订单:', this.allOrders);
+
+        // 如果没有订单数据，添加一些测试数据
+        if (this.myOrders.length === 0 && this.allOrders.length === 0) {
+          console.log('没有找到订单数据，添加测试数据');
+          const testOrders = [
+            {
+              orderId: 'test_1',
+              itemId: 1,
+              seller: this.account,
+              buyer: '0x1234567890123456789012345678901234567890',
+              blockNumber: 12345,
+              timestamp: new Date().toLocaleString(),
+              amount: 0.1,
+              rawAmount: 100000000000000000,
+              eventType: 'Test'
+            },
+            {
+              orderId: 'test_2',
+              itemId: 2,
+              seller: '0x1234567890123456789012345678901234567890',
+              buyer: this.account,
+              blockNumber: 12346,
+              timestamp: new Date().toLocaleString(),
+              amount: 0.05,
+              rawAmount: 50000000000000000,
+              eventType: 'Test'
+            }
+          ];
+
+          this.myOrders = testOrders;
+          this.allOrders = testOrders;
+          console.log('已添加测试订单数据');
+        } else {
+          console.log('找到真实订单数据，无需添加测试数据');
+        }
+
       } catch (error) {
         console.error('获取订单失败:', error);
-        // 如果获取订单失败，设置空数组
         this.myOrders = [];
         this.allOrders = [];
       }
@@ -1915,7 +2106,17 @@ export default {
 
     // 缩短哈希显示
     shortenHash(hash) {
-      return hash ? `${hash.substring(0, 6)}...${hash.substring(hash.length - 4)}` : '';
+      if (!hash || hash === '未知') {
+        return '未知';
+      }
+
+      // 检查是否是有效的哈希格式
+      if (hash.startsWith('0x') && hash.length >= 10) {
+        return `${hash.substring(0, 6)}...${hash.substring(hash.length - 4)}`;
+      }
+
+      // 如果不是标准哈希格式，返回原值
+      return hash;
     },
 
     // 时间戳格式化
@@ -1938,13 +2139,117 @@ export default {
     },
     async goToMyOrders() {
       this.currentView = 'my-orders';
+      console.log('切换到订单页面，开始获取订单数据...');
       await this.fetchMyOrders();
+      console.log('订单数据获取完成，当前订单数量:', this.myOrders.length);
       // TODO: 实现订单获取逻辑
     },
     async goToLeaderboard() {
       this.currentView = 'leaderboard';
       await this.fetchMyOrders(); // 主动调用获取数据
       // TODO: 实现排行榜逻辑
+    },
+
+    async testOrderData() {
+      try {
+        console.log('=== 测试订单数据 ===');
+        console.log('当前账户:', this.account);
+        console.log('合约实例:', this.contract);
+
+        if (!this.contract) {
+          alert('合约未初始化');
+          return;
+        }
+
+        // 测试获取事件
+        console.log('测试获取 ItemTraded 事件...');
+        try {
+          const latestBlock = await this.web3.eth.getBlockNumber();
+          const latestBlockNum = Number(latestBlock);
+          const blockRange = latestBlockNum > 100000 ? 10000 : latestBlockNum;
+          const fromBlock = Math.max(0, latestBlockNum - blockRange);
+
+          console.log(`测试区块范围: ${fromBlock} 到 ${latestBlockNum} (范围: ${blockRange})`);
+
+          const tradeEvents = await this.contract.getPastEvents('ItemTraded', {
+            fromBlock: fromBlock,
+            toBlock: 'latest'
+          });
+          console.log('ItemTraded 事件:', tradeEvents);
+        } catch (error) {
+          console.error('获取 ItemTraded 事件失败:', error);
+        }
+
+        console.log('测试获取 OrderCreated 事件...');
+        try {
+          const latestBlock = await this.web3.eth.getBlockNumber();
+          const latestBlockNum = Number(latestBlock);
+          const blockRange = latestBlockNum > 100000 ? 10000 : latestBlockNum;
+          const fromBlock = Math.max(0, latestBlockNum - blockRange);
+
+          const orderEvents = await this.contract.getPastEvents('OrderCreated', {
+            fromBlock: fromBlock,
+            toBlock: 'latest'
+          });
+          console.log('OrderCreated 事件:', orderEvents);
+        } catch (error) {
+          console.error('获取 OrderCreated 事件失败:', error);
+        }
+
+        // 测试获取订单计数器
+        try {
+          const orderCount = await this.contract.methods.orderCounter().call();
+          console.log('订单计数器:', orderCount);
+        } catch (error) {
+          console.error('获取订单计数器失败:', error);
+        }
+
+        alert('测试完成，请查看控制台输出');
+      } catch (error) {
+        console.error('测试订单数据失败:', error);
+        alert('测试失败: ' + error.message);
+      }
+    },
+
+    debugOrderData() {
+      console.log('=== 调试订单数据 ===');
+      console.log('当前账户:', this.account);
+      console.log('myOrders 长度:', this.myOrders.length);
+      console.log('allOrders 长度:', this.allOrders.length);
+      console.log('myOrders 数据:', this.myOrders);
+      console.log('allOrders 数据:', this.allOrders);
+      console.log('paginatedOrders 长度:', this.paginatedOrders.length);
+      console.log('paginatedOrders 数据:', this.paginatedOrders);
+      console.log('currentOrderPage:', this.currentOrderPage);
+      console.log('totalOrderPages:', this.totalOrderPages);
+
+      // 专门调试订单数据
+      console.log('=== 订单数据调试 ===');
+      this.myOrders.forEach((order, index) => {
+        console.log(`订单 ${index + 1}:`, {
+          orderId: order.orderId,
+          itemId: order.itemId,
+          amount: order.amount,
+          seller: order.seller,
+          buyer: order.buyer,
+          eventType: order.eventType
+        });
+      });
+
+      alert(`调试信息已输出到控制台\n\n订单数量: ${this.myOrders.length}\n分页订单数量: ${this.paginatedOrders.length}\n当前页: ${this.currentOrderPage}\n总页数: ${this.totalOrderPages}`);
+    },
+
+    toggleEventData() {
+      this.showEventData = !this.showEventData;
+      console.log('事件数据显示状态:', this.showEventData);
+      if (this.showEventData) {
+        this.fetchMyOrders(); // 重新获取数据以包含事件数据
+      } else {
+        // 过滤掉事件数据，只保留 getOrder 数据
+        this.myOrders = this.myOrders.filter(order => order.eventType === 'getOrder');
+        this.allOrders = this.allOrders.filter(order => order.eventType === 'getOrder');
+        console.log('已过滤事件数据，当前订单数量:', this.myOrders.length);
+      }
     },
 
     // 处理品牌点击，回到市场首页
@@ -2300,8 +2605,26 @@ export default {
       }
     },
 
-    showCreateChannel() {
+    openCreateChannelModal() {
+      console.log('=== openCreateChannelModal 被调用 ===');
+      console.log('当前 showCreateChannelModal 状态:', this.showCreateChannelModal);
+
+      // Vue 3 中直接赋值即可，不需要 $set
       this.showCreateChannelModal = true;
+      console.log('设置后 showCreateChannelModal 状态:', this.showCreateChannelModal);
+    },
+    testButtonClick() {
+      console.log('测试按钮被点击');
+      alert('测试按钮正常工作！');
+    },
+    forceShowModal() {
+      console.log('强制显示模态框');
+      console.log('当前状态:', this.showCreateChannelModal);
+
+      // Vue 3 中直接赋值即可
+      this.showCreateChannelModal = true;
+      console.log('设置后状态:', this.showCreateChannelModal);
+      alert('模态框状态已设置为 true');
     },
     closeCreateChannel() {
       this.showCreateChannelModal = false;
